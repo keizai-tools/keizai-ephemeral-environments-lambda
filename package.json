@@ -3,15 +3,15 @@
   "version": "1.0.0",
   "scripts": {
     "prebuild": "rm -rf dist",
-    "build": "esbuild ./src/index.ts --bundle --minify --sourcemap --platform=node --target=es2020 --outfile=dist/index.js",
-    "postbuild": "cd dist && zip -r index.zip index.js*"
+    "build": "esbuild ./src/index.ts --bundle --minify --sourcemap --platform=node --target=es2020 --outfile=dist/index.js"
   },
   "author": "",
   "license": "ISC",
   "description": "",
   "dependencies": {
     "@aws-sdk/client-cloudwatch-events": "^3.686.0",
-    "@aws-sdk/client-ecs": "^3.686.0"
+    "@aws-sdk/client-ecs": "^3.686.0",
+    "@aws-sdk/client-lambda": "^3.721.0"
   },
   "devDependencies": {
     "@eslint/js": "^9.14.0",
