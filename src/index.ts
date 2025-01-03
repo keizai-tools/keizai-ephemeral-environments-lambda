@@ -7,28 +7,41 @@ import {
   CloudWatchEventsClient,
   DeleteRuleCommand,
   RemoveTargetsCommand,
+  RemovePermissionCommand,
 } from "@aws-sdk/client-cloudwatch-events";
+import {
+  LambdaClient,
+  RemovePermissionCommand as LambdaRemovePermissionCommand,
+} from "@aws-sdk/client-lambda";
 
-export const handler = async (event: {
-  clientId: string;
-  ruleName: string;
-}) => {
-  if (!event.clientId || !event.ruleName) {
-    throw new Error("clientId and ruleName are required in the event object.");
+export async function handler({ taskID }: { taskID: string }) {
+  if (!taskID) {
+    console.error("Missing taskID in the event object.");
+    throw new Error("taskID is required in the event object.");
   }
 
-  const ecsClient = new ECSClient({ region: process.env.AWS_REGION });
-  const eventsClient = new CloudWatchEventsClient({
-    region: process.env.AWS_REGION,
-  });
-  const { clientId, ruleName } = event;
-  const cluster = process.env.FARGATE_CLUSTER;
+  const {
+    AWS_ECS_ACCESS_KEY: accessKeyId,
+    AWS_ECS_SECRET_KEY: secretAccessKey,
+    AWS_REGION: region,
+    FARGATE_CLUSTER: cluster,
+    LAMBDA_ARN: lambdaArn,
+  } = process.env;
+
+  if (!accessKeyId || !secretAccessKey) {
+    throw new Error("AWS ECS credentials are not defined.");
+  }
+
+  const credentials = { accessKeyId, secretAccessKey };
+  const ecsClient = new ECSClient({ region, credentials });
+  const eventsClient = new CloudWatchEventsClient({ region, credentials });
+  const lambdaClient = new LambdaClient({ region, credentials });
 
   try {
     const { taskArns } = await ecsClient.send(
       new ListTasksCommand({
         cluster,
-        startedBy: clientId,
+        startedBy: taskID,
       })
     );
 
@@ -44,22 +57,31 @@ export const handler = async (event: {
           )
         )
       );
-      console.log(`Stopped Fargate tasks: ${taskArns.join(", ")}`);
     } else {
-      console.log(`No tasks found for clientId: ${clientId}`);
+      console.warn(`No tasks found for taskID: ${taskID}`);
     }
 
     await eventsClient.send(
-      new RemoveTargetsCommand({ Rule: ruleName, Ids: [`${clientId}-target`] })
+      new RemoveTargetsCommand({ Rule: taskID, Ids: [taskID] })
     );
-    await eventsClient.send(new DeleteRuleCommand({ Name: ruleName }));
-    console.log(`Auto-stop rule deleted: ${ruleName}`);
+    await eventsClient.send(new DeleteRuleCommand({ Name: taskID }));
+    await eventsClient.send(
+      new RemovePermissionCommand({
+        StatementId: taskID,
+      })
+    );
+    await lambdaClient.send(
+      new LambdaRemovePermissionCommand({
+        FunctionName: lambdaArn,
+        StatementId: taskID,
+      })
+    );
   } catch (error) {
-    if (error instanceof Error) {
-      console.error(`Error stopping tasks or deleting rule: ${error.message}`);
-    } else {
-      console.error(`Unexpected error: ${error}`);
-    }
+    console.error(
+      `Error occurred during ECS or CloudWatch operations: ${
+        error instanceof Error ? error.message : error
+      }`
+    );
     throw error;
   }
-};
+}
