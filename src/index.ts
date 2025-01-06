@@ -9,6 +9,7 @@ import {
   RemoveTargetsCommand,
   RemovePermissionCommand,
   ListTargetsByRuleCommand,
+  type RemovePermissionCommandOutput,
 } from "@aws-sdk/client-cloudwatch-events";
 import {
   LambdaClient,
@@ -22,8 +23,8 @@ export async function handler({ taskID }: { taskID: string }) {
   }
 
   const {
-    AWS_ECS_ACCESS_KEY: accessKeyId,
-    AWS_ECS_SECRET_KEY: secretAccessKey,
+    ACCESS_KEY: accessKeyId,
+    SECRET_KEY: secretAccessKey,
     AWS_REGION: region,
     FARGATE_CLUSTER: cluster,
     LAMBDA_ARN: lambdaArn,
@@ -40,13 +41,10 @@ export async function handler({ taskID }: { taskID: string }) {
 
   try {
     const { taskArns } = await ecsClient.send(
-      new ListTasksCommand({
-        cluster,
-        startedBy: taskID,
-      })
+      new ListTasksCommand({ cluster, startedBy: taskID })
     );
 
-    if (taskArns && taskArns.length > 0) {
+    if (taskArns?.length) {
       await Promise.all(
         taskArns.map((taskArn) =>
           ecsClient.send(
@@ -62,38 +60,69 @@ export async function handler({ taskID }: { taskID: string }) {
       console.warn(`No tasks found for taskID: ${taskID}`);
     }
 
-    const targets = await eventsClient.send(
+    const { Targets: targets } = await eventsClient.send(
       new ListTargetsByRuleCommand({ Rule: taskID })
     );
-    if (targets.Targets && targets.Targets.length > 0) {
-      const validTargets = targets.Targets.filter((target) => target.Id !== undefined);
-      await Promise.all(
-        validTargets.map((target) =>
-          eventsClient.send(
-            new RemoveTargetsCommand({
-              Rule: taskID,
-              Ids: [target.Id!],
-            })
-          )
-        )
+
+    if (targets?.length) {
+      await eventsClient.send(
+        new RemoveTargetsCommand({
+          Rule: taskID,
+          Ids: targets.map((target) => target.Id!).filter(Boolean),
+        })
       );
     }
 
     await eventsClient.send(new DeleteRuleCommand({ Name: taskID }));
-    await eventsClient.send(
-      new RemovePermissionCommand({
-        StatementId: taskID,
-      })
+
+    const removePermissionSafely = async (
+      command: () => Promise<RemovePermissionCommandOutput>,
+      errorMessage: string
+    ) => {
+      try {
+        await command();
+      } catch (error) {
+        if ((error as Error).name !== "ResourceNotFoundException") {
+          throw error;
+        }
+        console.warn(errorMessage);
+      }
+    };
+
+    await removePermissionSafely(
+      () =>
+        eventsClient.send(new RemovePermissionCommand({ StatementId: taskID })),
+      `EventBus does not have a policy for StatementId: ${taskID}`
     );
-    await lambdaClient.send(
-      new LambdaRemovePermissionCommand({
-        FunctionName: lambdaArn,
-        StatementId: taskID,
-      })
+
+    await removePermissionSafely(
+      () =>
+        lambdaClient.send(
+          new LambdaRemovePermissionCommand({
+            FunctionName: lambdaArn,
+            StatementId: taskID,
+          })
+        ),
+      `Lambda does not have a policy for StatementId: ${taskID}`
+    );
+
+    await removePermissionSafely(
+      () =>
+        eventsClient.send(
+          new RemoveTargetsCommand({
+            Rule: taskID,
+            Ids: [taskID],
+          })
+        ),
+      `Failed to remove trigger for Rule: ${taskID}`
+    );
+
+    console.log(
+      `Successfully cleaned up resources and trigger for taskID: ${taskID}`
     );
   } catch (error) {
     console.error(
-      `Error occurred during ECS or CloudWatch operations: ${
+      `Error occurred during cleanup operations: ${
         error instanceof Error ? error.message : error
       }`
     );
