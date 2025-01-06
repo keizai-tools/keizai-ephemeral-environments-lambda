@@ -14,6 +14,8 @@ import {
 import {
   LambdaClient,
   RemovePermissionCommand as LambdaRemovePermissionCommand,
+  ListEventSourceMappingsCommand,
+  DeleteEventSourceMappingCommand,
 } from "@aws-sdk/client-lambda";
 
 export async function handler({ taskID }: { taskID: string }) {
@@ -120,6 +122,22 @@ export async function handler({ taskID }: { taskID: string }) {
     console.log(
       `Successfully cleaned up resources and trigger for taskID: ${taskID}`
     );
+
+    const eventSourceMappings = await lambdaClient.send(
+      new ListEventSourceMappingsCommand({ FunctionName: lambdaArn })
+    );
+
+    if (eventSourceMappings.EventSourceMappings) {
+      const mappingToDelete = eventSourceMappings.EventSourceMappings.find(
+        (mapping) => mapping.UUID === taskID
+      );
+
+      if (mappingToDelete) {
+        await lambdaClient.send(
+          new DeleteEventSourceMappingCommand({ UUID: mappingToDelete.UUID })
+        );
+      }
+    }
   } catch (error) {
     console.error(
       `Error occurred during cleanup operations: ${
