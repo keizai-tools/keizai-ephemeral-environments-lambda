@@ -8,6 +8,7 @@ import {
   DeleteRuleCommand,
   RemoveTargetsCommand,
   RemovePermissionCommand,
+  ListTargetsByRuleCommand,
 } from "@aws-sdk/client-cloudwatch-events";
 import {
   LambdaClient,
@@ -61,9 +62,23 @@ export async function handler({ taskID }: { taskID: string }) {
       console.warn(`No tasks found for taskID: ${taskID}`);
     }
 
-    await eventsClient.send(
-      new RemoveTargetsCommand({ Rule: taskID, Ids: [taskID] })
+    const targets = await eventsClient.send(
+      new ListTargetsByRuleCommand({ Rule: taskID })
     );
+    if (targets.Targets && targets.Targets.length > 0) {
+      const validTargets = targets.Targets.filter((target) => target.Id !== undefined);
+      await Promise.all(
+        validTargets.map((target) =>
+          eventsClient.send(
+            new RemoveTargetsCommand({
+              Rule: taskID,
+              Ids: [target.Id!],
+            })
+          )
+        )
+      );
+    }
+
     await eventsClient.send(new DeleteRuleCommand({ Name: taskID }));
     await eventsClient.send(
       new RemovePermissionCommand({
