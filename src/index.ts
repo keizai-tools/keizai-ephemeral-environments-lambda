@@ -68,9 +68,7 @@ export async function handler({ taskID }: { taskID: string }) {
       new ListTargetsByRuleCommand({ Rule: taskID })
     );
     if (targets.Targets && targets.Targets.length > 0) {
-      const validTargets = targets.Targets.filter(
-        (target) => target.Id !== undefined
-      );
+      const validTargets = targets.Targets.filter((target) => target.Id !== undefined);
       await Promise.all(
         validTargets.map((target) =>
           eventsClient.send(
